@@ -1,5 +1,6 @@
 ### START
 
+
 # Complete Hostinger VPS Setup Guide with NVM
 ## Deploy Next.js & React Projects with NVM, Nginx, PM2, and SSL
 
@@ -898,16 +899,524 @@ pm2 restart my-app
 
 ---
 
+## SSH Key Setup for GitHub Actions
+
+### Step 1: Generate SSH Key on Server
+
+```bash
+# 1. Go to home directory
+cd ~
+
+# 2. Navigate to SSH directory
+cd ~/.ssh/
+
+# 3. List files
+ls
+
+# 4. View authorized keys (if exists)
+cat authorized_keys
+
+# 5. Generate new SSH key
+ssh-keygen -t ed25519 -C "github-actions@yourdomain.com"
+# Press Enter to accept default location
+# Press Enter twice for no passphrase (required for automation)
+
+# 6. List files again
+ls
+
+# 7. Display private key (KEEP THIS SECRET!)
+cat id_ed25519
+
+# 8. Display public key
+cat id_ed25519.pub
+```
+
+### Step 2: Add Public Key to Authorized Keys
+
+```bash
+# Add your public key to authorized_keys
+cat id_ed25519.pub >> authorized_keys
+
+# Set proper permissions
+chmod 600 authorized_keys
+chmod 700 ~/.ssh
+```
+
+### Step 3: Copy Private Key for GitHub Secrets
+
+```bash
+cat id_ed25519
+```
+
+Copy the entire output (including `-----BEGIN OPENSSH PRIVATE KEY-----` and `-----END OPENSSH PRIVATE KEY-----`)
+
+---
+
+## GitHub Actions Setup
+
+### Step 1: Add GitHub Secrets
+
+Go to your GitHub repository:
+1. **Settings** → **Secrets and variables** → **Actions**
+2. Click **New repository secret**
+
+Add these secrets:
+
+| Secret Name | Value | Example |
+|-------------|-------|---------|
+| `SERVER_SSH_KEY` | Private key from `cat id_ed25519` | Entire private key content |
+| `SERVER_HOST` | Your server IP or domain | `123.456.789.0` or `srv742002.hstgr.cloud` |
+| `SERVER_USER` | SSH username | `root` or `ubuntu` |
+| `SERVER_PATH` | Project path on server | `/var/www/project/my-app` |
+| `PM2_APP_NAME` | PM2 application name | `my-app` |
+
+### Step 2: Create GitHub Actions Workflow
+
+Create `.github/workflows/deploy.yml` in your repository:
+
+```yaml
+name: Auto Deploy to Server
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - '.github/**'
+
+jobs:
+  deploy:
+    name: Deploy to Production Server
+    # Only run if any commit message in the push contains "SERVER_PUSH"
+    if: contains(join(github.event.commits.*.message, ' '), 'SERVER_PUSH')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20' # or use '18', '24', etc.
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build project
+        run: npm run build
+        # Build outputs:
+        # - Next.js (static): `out/`
+        # - Next.js (SSR): `.next/`
+        # - Vite/React: `dist/`
+
+      - name: Prepare SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy to Server
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+            "cd ${{ secrets.SERVER_PATH }} && \
+             git pull origin main && \
+             source ~/.nvm/nvm.sh && \
+             nvm use && \
+             npm ci && \
+             npm run build"
+
+      - name: Restart PM2 process
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+            "source ~/.nvm/nvm.sh && \
+             pm2 restart ${{ secrets.PM2_APP_NAME }} || \
+             echo 'PM2 app not found or already stopped'"
+
+      - name: Clean up
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
+```
+
+---
+
+## Alternative: Deploy Build Files Only
+
+If you want to deploy only the build files (not use git pull):
+
+```yaml
+name: Deploy Build to Server
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - '.github/**'
+
+jobs:
+  deploy:
+    name: Deploy to Production Server
+    if: contains(join(github.event.commits.*.message, ' '), 'SERVER_PUSH')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build project
+        run: npm run build
+
+      - name: Prepare SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Create backup on server
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+            "cd ${{ secrets.SERVER_PATH }} && \
+             [ -d .next ] && cp -r .next .next.backup || true && \
+             [ -d dist ] && cp -r dist dist.backup || true"
+
+      - name: Upload build files
+        run: |
+          # For Next.js
+          rsync -avz -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" \
+            .next/ ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:${{ secrets.SERVER_PATH }}/.next/
+          
+          # For React/Vite (uncomment if needed)
+          # rsync -avz -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" \
+          #   dist/ ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:${{ secrets.SERVER_PATH }}/dist/
+
+      - name: Restart PM2 process
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+            "source ~/.nvm/nvm.sh && \
+             pm2 restart ${{ secrets.PM2_APP_NAME }}"
+
+      - name: Clean up
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
+```
+
+---
+
+## Example Workflow for Multiple Projects
+
+```yaml
+name: Multi-Project Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy-frontend:
+    name: Deploy Frontend
+    if: contains(join(github.event.commits.*.message, ' '), 'FRONTEND_PUSH')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      - run: npm run build
+      - name: Deploy
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy_key ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+            "cd /var/www/project/frontend && \
+             git pull && \
+             source ~/.nvm/nvm.sh && nvm use && \
+             npm ci && npm run build && \
+             pm2 restart frontend"
+
+  deploy-backend:
+    name: Deploy Backend
+    if: contains(join(github.event.commits.*.message, ' '), 'BACKEND_PUSH')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      - run: npm ci
+      - name: Deploy
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy_key ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+            "cd /var/www/project/backend && \
+             git pull && \
+             source ~/.nvm/nvm.sh && nvm use && \
+             npm ci && \
+             pm2 restart backend"
+```
+
+---
+
+## How to Use
+
+### Trigger Deployment
+
+Add `SERVER_PUSH` to your commit message:
+
+```bash
+git add .
+git commit -m "Update homepage layout SERVER_PUSH"
+git push origin main
+```
+
+Or for multiple projects:
+```bash
+git commit -m "Update API endpoints BACKEND_PUSH"
+git commit -m "Fix navbar issue FRONTEND_PUSH"
+```
+
+### View Deployment Status
+
+1. Go to your GitHub repository
+2. Click **Actions** tab
+3. See running/completed workflows
+
+---
+
+## Deployment Script Variations
+
+### For Next.js SSR (with PM2)
+```yaml
+- name: Deploy and Restart
+  run: |
+    ssh -i ~/.ssh/deploy_key ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+      "cd ${{ secrets.SERVER_PATH }} && \
+       git pull origin main && \
+       source ~/.nvm/nvm.sh && nvm use && \
+       npm ci && \
+       npm run build && \
+       pm2 restart ${{ secrets.PM2_APP_NAME }}"
+```
+
+### For React/Vite (Static Files)
+```yaml
+- name: Deploy Static Files
+  run: |
+    rsync -avz --delete -e "ssh -i ~/.ssh/deploy_key" \
+      dist/ ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:${{ secrets.SERVER_PATH }}/dist/
+    
+    ssh -i ~/.ssh/deploy_key ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+      "pm2 restart ${{ secrets.PM2_APP_NAME }}"
+```
+
+### With Database Migrations
+```yaml
+- name: Run Migrations
+  run: |
+    ssh -i ~/.ssh/deploy_key ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+      "cd ${{ secrets.SERVER_PATH }} && \
+       source ~/.nvm/nvm.sh && nvm use && \
+       npm run migrate"
+```
+
+---
+
+## Troubleshooting GitHub Actions
+
+### SSH Connection Failed
+```yaml
+# Add debug step
+- name: Debug SSH Connection
+  run: |
+    ssh -i ~/.ssh/deploy_key -v ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "echo 'Connected successfully'"
+```
+
+### NVM Not Found
+```yaml
+# Load NVM in every SSH command
+- name: Deploy
+  run: |
+    ssh -i ~/.ssh/deploy_key ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+      "export NVM_DIR=\"\$HOME/.nvm\" && \
+       [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\" && \
+       cd ${{ secrets.SERVER_PATH }} && \
+       nvm use && npm ci && npm run build && pm2 restart app"
+```
+
+### Permission Denied
+```bash
+# On server, check permissions
+ls -la ${{ secrets.SERVER_PATH }}
+sudo chown -R $USER:$USER ${{ secrets.SERVER_PATH }}
+```
+
+### PM2 Command Not Found
+```yaml
+# Use full path to PM2
+- name: Restart PM2
+  run: |
+    ssh -i ~/.ssh/deploy_key ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+      "source ~/.nvm/nvm.sh && \
+       nvm use && \
+       ~/.nvm/versions/node/v20.*/bin/pm2 restart ${{ secrets.PM2_APP_NAME }}"
+```
+
+---
+
+## Advanced: Zero-Downtime Deployment
+
+```yaml
+- name: Zero-Downtime Deploy
+  run: |
+    ssh -i ~/.ssh/deploy_key ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
+      cd ${{ secrets.SERVER_PATH }}
+      git pull origin main
+      source ~/.nvm/nvm.sh && nvm use
+      npm ci
+      npm run build
+      
+      # Start new instance
+      pm2 start npm --name "app-new" -- start
+      sleep 5
+      
+      # Switch traffic
+      pm2 delete app
+      pm2 restart app-new --name app
+      
+      pm2 save
+    EOF
+```
+
+---
+
+## Complete Example: Real Project
+
+```yaml
+name: Deploy to Hostinger VPS
+
+on:
+  push:
+    branches:
+      - main
+      - production
+
+jobs:
+  deploy:
+    name: Deploy Application
+    if: contains(join(github.event.commits.*.message, ' '), 'DEPLOY')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build project
+        run: npm run build
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Create backup
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+            "cd ${{ secrets.SERVER_PATH }} && \
+             tar -czf backup-$(date +%Y%m%d-%H%M%S).tar.gz .next node_modules || true"
+
+      - name: Deploy application
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+            "cd ${{ secrets.SERVER_PATH }} && \
+             git pull origin main && \
+             source ~/.nvm/nvm.sh && \
+             nvm use && \
+             npm ci --production && \
+             npm run build"
+
+      - name: Restart PM2
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+            "source ~/.nvm/nvm.sh && pm2 restart ${{ secrets.PM2_APP_NAME }}"
+
+      - name: Health check
+        run: |
+          sleep 10
+          curl -f https://yourdomain.com || exit 1
+
+      - name: Cleanup
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
+
+      - name: Notify on failure
+        if: failure()
+        run: echo "Deployment failed! Check logs."
+```
+
+---
+
+## Security Best Practices
+
+1. **Never commit private keys** to repository
+2. **Use GitHub Secrets** for all sensitive data
+3. **Use ed25519 keys** instead of RSA (more secure)
+4. **Rotate SSH keys** periodically
+5. **Limit SSH key permissions** on server
+6. **Use separate deploy keys** per project
+7. **Enable branch protection** rules
+8. **Review workflow logs** regularly
+9. **Use environment-specific secrets**
+10. **Clean up SSH keys** after deployment
+
+---
+
 ## Support & Resources
 
 - **NVM GitHub:** https://github.com/nvm-sh/nvm
 - **Nginx Documentation:** https://nginx.org/en/docs/
 - **PM2 Documentation:** https://pm2.keymetrics.io/docs/
+- **GitHub Actions:** https://docs.github.com/en/actions
 - **Let's Encrypt:** https://letsencrypt.org/
 - **Hostinger Tutorials:** https://www.hostinger.com/tutorials/
-
-
-
 
 
 
