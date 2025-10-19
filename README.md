@@ -1,3 +1,920 @@
+### START
+
+# Complete Hostinger VPS Setup Guide with NVM
+## Deploy Next.js & React Projects with NVM, Nginx, PM2, and SSL
+
+---
+
+## Prerequisites
+- Hostinger VPS account
+- Domain name pointed to your VPS IP
+- SSH access to your server
+- Git repository URL
+
+---
+
+## Step 1: Update System & Install Required Packages
+
+```bash
+sudo apt update && sudo apt upgrade -y
+```
+
+### Install Nginx, Git, and Curl
+```bash
+sudo apt install nginx git curl build-essential -y
+```
+
+**Note:** We're NOT installing Node.js and NPM via apt because we'll use NVM instead.
+
+---
+
+## Step 2: Install NVM (Node Version Manager)
+
+### Download and install NVM
+```bash
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+```
+
+### Load NVM into current session
+```bash
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+```
+
+### Verify NVM installation
+```bash
+nvm --version
+```
+
+You should see something like: `0.39.7`
+
+---
+
+## Step 3: Install Node.js using NVM
+
+### Install latest LTS version
+```bash
+nvm install --lts
+```
+
+### Or install specific version
+```bash
+# Install Node.js 20
+nvm install 20
+
+# Install Node.js 18
+nvm install 18
+
+# Install Node.js 16
+nvm install 16
+```
+
+### Set default Node.js version
+```bash
+nvm alias default 20
+```
+
+### Verify installation
+```bash
+node -v
+npm -v
+nvm current
+```
+
+### List installed Node.js versions
+```bash
+nvm ls
+```
+
+### Switch between Node.js versions
+```bash
+nvm use 20
+# or
+nvm use 18
+```
+
+---
+
+## Step 4: Create Project Directory
+
+```bash
+sudo mkdir -p /var/www/project
+```
+
+### Set proper permissions
+```bash
+sudo chown -R $USER:$USER /var/www/project
+```
+
+---
+
+## Step 5: Clone Your Repository
+
+```bash
+cd /var/www/project
+git clone https://your-repo-url.git my-git-file
+```
+
+**Replace:**
+- `https://your-repo-url.git` with your actual repository URL
+- `my-git-file` with your project folder name
+
+---
+
+## Step 6: Install Project Dependencies
+
+```bash
+cd my-git-file
+npm install
+```
+
+### If you need a specific Node.js version for this project
+Create `.nvmrc` file in project root:
+```bash
+echo "20" > .nvmrc
+```
+
+Then use it:
+```bash
+nvm use
+```
+
+---
+
+## Step 7: Build Your Project
+
+### For Next.js:
+```bash
+npm run build
+```
+
+### For React (Vite):
+```bash
+npm run build
+```
+
+---
+
+## Step 8: Install PM2 Process Manager
+
+```bash
+npm install pm2@latest -g
+```
+
+**Note:** Since we're using NVM, PM2 is installed per Node.js version. No need for `sudo`.
+
+---
+
+## Step 9: Start Application with PM2
+
+### For Next.js:
+```bash
+pm2 start npm --name "my-app" -- start
+```
+
+### For React (using serve):
+```bash
+# Install serve globally
+npm install -g serve
+
+# Start with PM2
+pm2 start serve --name "my-app" -- -s build -l 3000
+```
+
+### For React (using Vite preview):
+```bash
+pm2 start npm --name "my-app" -- run preview
+```
+
+---
+
+## Step 10: Save PM2 Configuration
+
+```bash
+pm2 save
+```
+
+---
+
+## Step 11: Enable PM2 Startup on Boot (with NVM)
+
+This is **CRITICAL** for NVM users - the standard `pm2 startup` won't work properly.
+
+### Step 11a: Get PM2 startup command
+```bash
+pm2 startup
+```
+
+This will output a command like:
+```bash
+sudo env PATH=$PATH:/home/username/.nvm/versions/node/v20.x.x/bin ...
+```
+
+### Step 11b: Run the command it provides
+Copy and paste the entire command from the output.
+
+### Step 11c: Verify PM2 will start on boot
+```bash
+pm2 save
+sudo reboot
+# After reboot, check:
+pm2 list
+```
+
+---
+
+## Step 12: Configure Nginx
+
+### Create Nginx configuration file
+```bash
+sudo nano /etc/nginx/sites-available/my-app
+```
+
+### Basic Configuration (Single Frontend)
+
+```nginx
+server {
+    listen 80;
+    server_name yourdomain.com www.yourdomain.com;
+
+    location / {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+### Advanced Configuration (Frontend + Backend)
+
+```nginx
+server {
+    listen 80;
+    server_name yourdomain.com www.yourdomain.com;
+
+    # Frontend
+    location / {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Backend API
+    location /api/ {
+        proxy_pass http://localhost:8000/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+**Replace:**
+- `yourdomain.com` with your actual domain
+- Port `3000` with your frontend port
+- Port `8000` with your backend port (if applicable)
+
+### Save and exit
+Press `CTRL + X`, then `Y`, then `Enter`
+
+---
+
+## Step 13: Enable Nginx Site
+
+```bash
+sudo ln -s /etc/nginx/sites-available/my-app /etc/nginx/sites-enabled/
+```
+
+---
+
+## Step 14: Test Nginx Configuration
+
+```bash
+sudo nginx -t
+```
+
+You should see:
+```
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+```
+
+---
+
+## Step 15: Reload Nginx
+
+```bash
+sudo systemctl reload nginx
+```
+
+Or restart if reload doesn't work:
+```bash
+sudo systemctl restart nginx
+```
+
+---
+
+## Step 16: Install SSL Certificate (Let's Encrypt)
+
+### Install Certbot
+```bash
+sudo apt install certbot python3-certbot-nginx -y
+```
+
+### Obtain SSL Certificate
+```bash
+sudo certbot --nginx -d yourdomain.com -d www.yourdomain.com
+```
+
+Follow the prompts:
+1. Enter your email address
+2. Agree to terms of service
+3. Choose whether to redirect HTTP to HTTPS (recommended: Yes)
+
+### Auto-renewal test
+```bash
+sudo certbot renew --dry-run
+```
+
+---
+
+## Step 17: Configure Firewall (Optional but Recommended)
+
+```bash
+# Install UFW
+sudo apt install ufw -y
+
+# Allow SSH
+sudo ufw allow OpenSSH
+
+# Allow HTTP and HTTPS
+sudo ufw allow 'Nginx Full'
+
+# Enable firewall
+sudo ufw enable
+
+# Check status
+sudo ufw status
+```
+
+---
+
+## Multiple Projects Setup with Different Node Versions
+
+### Project 1: horizonlinetours.com (Node.js 20)
+```bash
+cd /var/www/project
+git clone https://github.com/user/horizon-tours.git horizon-tours
+cd horizon-tours
+
+# Create .nvmrc
+echo "20" > .nvmrc
+
+# Use Node.js 20
+nvm use
+
+# Install and build
+npm install
+npm run build
+
+# Start with PM2
+pm2 start npm --name "horizon-tours" -- start
+```
+
+**Nginx config:** `/etc/nginx/sites-available/horizon-tours`
+```nginx
+server {
+    listen 80;
+    server_name horizonlinetours.com www.horizonlinetours.com;
+
+    location / {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+
+    location /api/ {
+        proxy_pass http://localhost:8000/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+```
+
+### Project 2: book-world.nexsoftdev.com (Node.js 18)
+```bash
+cd /var/www/project
+git clone https://github.com/user/book-world.git book-world
+cd book-world
+
+# Create .nvmrc
+echo "18" > .nvmrc
+
+# Use Node.js 18
+nvm use
+
+# Install and build
+npm install
+npm run build
+
+# Start with PM2
+pm2 start npm --name "book-world" -- run preview
+```
+
+**Nginx config:** `/etc/nginx/sites-available/book-world`
+```nginx
+server {
+    listen 80;
+    server_name book-world.nexsoftdev.com;
+
+    location / {
+        proxy_pass http://localhost:5173;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+```
+
+**Enable both sites:**
+```bash
+sudo ln -s /etc/nginx/sites-available/horizon-tours /etc/nginx/sites-enabled/
+sudo ln -s /etc/nginx/sites-available/book-world /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+**Get SSL for both:**
+```bash
+sudo certbot --nginx -d horizonlinetours.com -d www.horizonlinetours.com
+sudo certbot --nginx -d book-world.nexsoftdev.com
+```
+
+**Save PM2 configuration:**
+```bash
+pm2 save
+```
+
+---
+
+## NVM Commands Reference
+
+```bash
+# Install latest LTS version
+nvm install --lts
+
+# Install specific version
+nvm install 20
+nvm install 18.17.0
+
+# List installed versions
+nvm ls
+
+# List available versions
+nvm ls-remote
+
+# Use specific version
+nvm use 20
+nvm use 18
+
+# Use version from .nvmrc
+nvm use
+
+# Set default version
+nvm alias default 20
+
+# Current version
+nvm current
+
+# Uninstall version
+nvm uninstall 16
+
+# Run command with specific version
+nvm exec 18 node app.js
+
+# Install global packages for current version
+npm install -g pm2 serve
+```
+
+---
+
+## PM2 Commands
+
+```bash
+# List all applications
+pm2 list
+
+# View logs
+pm2 logs my-app
+
+# View specific app logs
+pm2 logs my-app --lines 100
+
+# Restart application
+pm2 restart my-app
+
+# Stop application
+pm2 stop my-app
+
+# Delete application
+pm2 delete my-app
+
+# Delete all
+pm2 delete all
+
+# Monitor applications
+pm2 monit
+
+# Save current process list
+pm2 save
+
+# Show detailed info
+pm2 show my-app
+
+# Flush logs
+pm2 flush
+```
+
+---
+
+## Nginx Commands
+
+```bash
+# Test configuration
+sudo nginx -t
+
+# Reload Nginx
+sudo systemctl reload nginx
+
+# Restart Nginx
+sudo systemctl restart nginx
+
+# Check Nginx status
+sudo systemctl status nginx
+
+# View error logs
+sudo tail -f /var/log/nginx/error.log
+
+# View access logs
+sudo tail -f /var/log/nginx/access.log
+```
+
+---
+
+## Updating Your Application
+
+```bash
+# Navigate to project
+cd /var/www/project/my-git-file
+
+# Ensure correct Node version
+nvm use
+
+# Pull latest changes
+git pull origin main
+
+# Install new dependencies
+npm install
+
+# Rebuild
+npm run build
+
+# Restart PM2 application
+pm2 restart my-app
+```
+
+---
+
+## Creating Deployment Script
+
+Create `deploy.sh` in your project:
+
+```bash
+#!/bin/bash
+
+# Load NVM
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+
+# Navigate to project
+cd /var/www/project/my-git-file
+
+# Use correct Node version
+nvm use
+
+# Pull latest changes
+echo "Pulling latest changes..."
+git pull origin main
+
+# Install dependencies
+echo "Installing dependencies..."
+npm install
+
+# Build project
+echo "Building project..."
+npm run build
+
+# Restart PM2
+echo "Restarting application..."
+pm2 restart my-app
+
+echo "Deployment complete!"
+```
+
+Make it executable:
+```bash
+chmod +x deploy.sh
+```
+
+Run it:
+```bash
+./deploy.sh
+```
+
+---
+
+## Troubleshooting
+
+### NVM command not found after reboot
+Add to `~/.bashrc` or `~/.zshrc`:
+```bash
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+```
+
+Then:
+```bash
+source ~/.bashrc
+```
+
+### PM2 not starting on boot with NVM
+The PATH in the startup script must include NVM's Node.js path. Run:
+```bash
+pm2 unstartup
+pm2 startup
+# Copy and run the command it provides
+pm2 save
+```
+
+### Different Node versions for different projects
+```bash
+# Project 1
+cd /var/www/project/project1
+nvm use 20
+pm2 start npm --name "project1" -- start
+
+# Project 2
+cd /var/www/project/project2
+nvm use 18
+pm2 start npm --name "project2" -- start
+
+pm2 save
+```
+
+### Port already in use
+```bash
+# Find process using port
+sudo lsof -i :3000
+
+# Kill process
+sudo kill -9 <PID>
+```
+
+### Nginx 502 Bad Gateway
+```bash
+# Check if your app is running
+pm2 list
+
+# Check PM2 logs
+pm2 logs my-app
+
+# Restart your app
+pm2 restart my-app
+```
+
+### Permission denied errors
+```bash
+# Change ownership to current user
+sudo chown -R $USER:$USER /var/www/project/my-git-file
+```
+
+### SSL renewal issues
+```bash
+# Test renewal
+sudo certbot renew --dry-run
+
+# Force renewal
+sudo certbot renew --force-renewal
+```
+
+---
+
+## Complete Setup Commands (Quick Copy-Paste)
+
+```bash
+# 1. Update system
+sudo apt update && sudo apt upgrade -y
+
+# 2. Install dependencies
+sudo apt install nginx git curl build-essential -y
+
+# 3. Install NVM
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+
+# 4. Load NVM
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+
+# 5. Install Node.js
+nvm install --lts
+nvm alias default node
+
+# 6. Verify
+node -v
+npm -v
+nvm --version
+
+# 7. Create project directory
+sudo mkdir -p /var/www/project
+sudo chown -R $USER:$USER /var/www/project
+
+# 8. Clone repository
+cd /var/www/project
+git clone https://your-repo-url.git my-git-file
+cd my-git-file
+
+# 9. Install dependencies
+npm install
+
+# 10. Build project
+npm run build
+
+# 11. Install PM2
+npm install -g pm2
+
+# 12. Start with PM2
+pm2 start npm --name "my-app" -- start
+
+# 13. Save PM2 config
+pm2 save
+
+# 14. Setup PM2 startup (run the command it outputs)
+pm2 startup
+
+# 15. Configure Nginx
+sudo nano /etc/nginx/sites-available/my-app
+
+# 16. Enable site
+sudo ln -s /etc/nginx/sites-available/my-app /etc/nginx/sites-enabled/
+
+# 17. Test Nginx
+sudo nginx -t
+
+# 18. Reload Nginx
+sudo systemctl reload nginx
+
+# 19. Install SSL
+sudo apt install certbot python3-certbot-nginx -y
+sudo certbot --nginx -d yourdomain.com -d www.yourdomain.com
+
+# 20. Setup firewall
+sudo apt install ufw -y
+sudo ufw allow OpenSSH
+sudo ufw allow 'Nginx Full'
+sudo ufw enable
+```
+
+---
+
+## Environment Variables with NVM
+
+Create `.env` file in your project:
+
+```bash
+cd /var/www/project/my-git-file
+nano .env
+```
+
+Example `.env`:
+```env
+NODE_ENV=production
+PORT=3000
+DATABASE_URL=your-database-url
+API_URL=https://yourdomain.com/api
+```
+
+**Important:** Rebuild after changing environment variables:
+```bash
+nvm use
+npm run build
+pm2 restart my-app
+```
+
+---
+
+## Security Best Practices
+
+1. **Use NVM instead of system Node.js** - Better version control
+2. **Change default SSH port**
+3. **Disable root login**
+4. **Use SSH keys instead of passwords**
+5. **Keep system updated:** `sudo apt update && sudo apt upgrade -y`
+6. **Enable firewall:** `sudo ufw enable`
+7. **Regular backups of /var/www/project**
+8. **Monitor logs regularly**
+9. **Use `.nvmrc` files** for project-specific Node versions
+10. **Don't use `sudo` with npm when using NVM**
+
+---
+
+## Port Configuration Reference
+
+| Service Type | Default Port | Used For |
+|--------------|-------------|----------|
+| Next.js | 3000 | Production server |
+| React (Vite) | 5173 | Preview/Dev server |
+| Backend API | 8000, 5000, 4000 | Express/Node API |
+| Nginx | 80 (HTTP), 443 (HTTPS) | Web server |
+
+---
+
+## Quick Setup Checklist
+
+- [ ] Update system packages
+- [ ] Install Nginx, Git, Curl, Build-essential
+- [ ] Install NVM
+- [ ] Install Node.js via NVM
+- [ ] Set default Node version
+- [ ] Create project directory
+- [ ] Clone repository
+- [ ] Create .nvmrc file (optional)
+- [ ] Install dependencies
+- [ ] Build project
+- [ ] Install PM2 globally
+- [ ] Start app with PM2
+- [ ] Save PM2 configuration
+- [ ] Setup PM2 startup (IMPORTANT for NVM)
+- [ ] Configure Nginx
+- [ ] Enable Nginx site
+- [ ] Test Nginx configuration
+- [ ] Reload Nginx
+- [ ] Install SSL certificate
+- [ ] Configure firewall
+- [ ] Test website access
+- [ ] Create deployment script
+
+---
+
+## Why Use NVM?
+
+✅ **Multiple Node versions** on the same server
+✅ **Easy switching** between versions
+✅ **No sudo required** for global npm packages
+✅ **Project-specific versions** with .nvmrc
+✅ **Clean uninstall** of Node versions
+✅ **Better permission management**
+✅ **No conflicts** between system Node and project Node
+
+---
+
+## Support & Resources
+
+- **NVM GitHub:** https://github.com/nvm-sh/nvm
+- **Nginx Documentation:** https://nginx.org/en/docs/
+- **PM2 Documentation:** https://pm2.keymetrics.io/docs/
+- **Let's Encrypt:** https://letsencrypt.org/
+- **Hostinger Tutorials:** https://www.hostinger.com/tutorials/
+
+
+
+
+
+
+
+
+### END
+
 # PM2 + Vite React Project Setup Guide
 
 ## Prerequisites
