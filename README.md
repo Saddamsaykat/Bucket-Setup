@@ -174,6 +174,10 @@ npm install pm2@latest -g
 pm2 start npm --name "my-app" -- start
 ```
 
+```bash
+pm2 start npm --name "nextjs-app-3001" -- start -- -p 3001
+```
+
 ### For React (using serve):
 ```bash
 # Install serve globally
