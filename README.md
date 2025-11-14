@@ -1,7 +1,7 @@
 ### START
 
 
-# Complete Hostinger VPS Setup Guide with NVM
+# Complete VPS Setup Guide with NVM
 ## Deploy Next.js & React Projects with NVM, Nginx, PM2, and SSL
 
 ---
